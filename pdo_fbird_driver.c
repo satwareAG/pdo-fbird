@@ -7,9 +7,16 @@
 #include "config.h"
 #endif
 
+/* jane #636: php.h MUST precede the HAVE_PDO_FBIRD guard (see pdo_fbird.c). */
+#include "php.h"
+
+#ifdef PHP_WIN32
+/* jane #636: MSVC has strtok_s with identical signature/semantics. */
+#define strtok_r strtok_s
+#endif
+
 #ifdef HAVE_PDO_FBIRD
 
-#include "php.h"
 #include "zend_smart_str.h"
 #include "ext/pdo/php_pdo.h"
 #include "ext/pdo/php_pdo_driver.h"
@@ -64,8 +71,8 @@ static void* _pdo_fbt_start(pdo_fbird_db_handle *H)
 	zend_long flags = _pdo_fbird_tpb_flags(H, !H->in_manually_transaction);
 	unsigned tpb_len = 0;
 	unsigned char *tpb = fbxpb_build_tpb(
-		FBG(master_instance), flags, 0, &tpb_len, H->status);
-	void *trans = fbt_start(FBG(master_instance), att, tpb_len, tpb, H->status);
+		fbird_utils_get_master_instance(), flags, 0, &tpb_len, H->status);
+	void *trans = fbt_start(fbird_utils_get_master_instance(), att, tpb_len, tpb, H->status);
 	fbxpb_free_tpb(tpb);
 	return trans;
 }
@@ -83,7 +90,7 @@ static void pdo_fbird_handle_closer(pdo_dbh_t *dbh)
 	}
 
 	if (H->fbsvc_service) {
-		fbsvc_detach(FBG(master_instance), H->fbsvc_service, H->status);
+		fbsvc_detach(fbird_utils_get_master_instance(), H->fbsvc_service, H->status);
 		fbsvc_free(H->fbsvc_service);
 		H->fbsvc_service = NULL;
 	}
@@ -170,7 +177,7 @@ static bool pdo_fbird_handle_preparer(pdo_dbh_t *dbh, zend_string *sql,
 	void *tr  = fbt_get_handle(H->fbt_trans);
 
 	S->fbs_stmt = fbs_prepare(
-		FBG(master_instance), att, tr, H->fbc_conn,
+		fbird_utils_get_master_instance(), att, tr, H->fbc_conn,
 		prepare_sql, prepare_len,
 		H->dialect, S->status
 	);
@@ -187,17 +194,17 @@ static bool pdo_fbird_handle_preparer(pdo_dbh_t *dbh, zend_string *sql,
 		return 0;
 	}
 
-	S->out_meta  = fbs_get_output_metadata(FBG(master_instance), S->fbs_stmt, S->status);
-	S->out_count = S->out_meta ? fbm_get_count(FBG(master_instance), S->out_meta) : 0;
+	S->out_meta  = fbs_get_output_metadata(fbird_utils_get_master_instance(), S->fbs_stmt, S->status);
+	S->out_count = S->out_meta ? fbm_get_count(fbird_utils_get_master_instance(), S->out_meta) : 0;
 	if (S->out_meta && S->out_count > 0) {
-		unsigned msg_len = fbm_get_message_length(FBG(master_instance), S->out_meta);
+		unsigned msg_len = fbm_get_message_length(fbird_utils_get_master_instance(), S->out_meta);
 		S->out_buf = ecalloc(1, msg_len);
 	}
 
-	S->in_meta  = fbs_get_input_metadata(FBG(master_instance), S->fbs_stmt, S->status);
-	S->in_count = S->in_meta ? fbm_get_count(FBG(master_instance), S->in_meta) : 0;
+	S->in_meta  = fbs_get_input_metadata(fbird_utils_get_master_instance(), S->fbs_stmt, S->status);
+	S->in_count = S->in_meta ? fbm_get_count(fbird_utils_get_master_instance(), S->in_meta) : 0;
 	if (S->in_meta && S->in_count > 0) {
-		unsigned msg_len = fbm_get_message_length(FBG(master_instance), S->in_meta);
+		unsigned msg_len = fbm_get_message_length(fbird_utils_get_master_instance(), S->in_meta);
 		S->in_buf = ecalloc(1, msg_len);
 	}
 
@@ -310,7 +317,7 @@ static zend_long pdo_fbird_handle_doer(pdo_dbh_t *dbh, const zend_string *sql)
 			had_statements = 1;
 
 			ISC_STATUS_ARRAY st = {0};
-			void *fbs = fbs_prepare(FBG(master_instance), att, tr, H->fbc_conn,
+			void *fbs = fbs_prepare(fbird_utils_get_master_instance(), att, tr, H->fbc_conn,
 				p, (unsigned)len, H->dialect, st);
 			if (!fbs) {
 				memcpy(H->status, st, sizeof(ISC_STATUS_ARRAY));
@@ -322,7 +329,7 @@ static zend_long pdo_fbird_handle_doer(pdo_dbh_t *dbh, const zend_string *sql)
 				return -1;
 			}
 
-			int rc = fbs_execute(FBG(master_instance), fbs, tr,
+			int rc = fbs_execute(fbird_utils_get_master_instance(), fbs, tr,
 				NULL, NULL, NULL, NULL, st);
 			if (!rc) {
 				memcpy(H->status, st, sizeof(ISC_STATUS_ARRAY));
@@ -336,7 +343,7 @@ static zend_long pdo_fbird_handle_doer(pdo_dbh_t *dbh, const zend_string *sql)
 			}
 
 			zend_long affected = (zend_long)fbs_get_affected_records(
-				FBG(master_instance), fbs, st);
+				fbird_utils_get_master_instance(), fbs, st);
 			fbs_free(fbs, NULL);
 			total_affected += (affected >= 0 ? affected : 0);
 		}
@@ -441,12 +448,12 @@ static int _pdo_fbird_service_ensure_attached(pdo_dbh_t *dbh)
 	}
 
 	if (H->fbsvc_service) {
-		fbsvc_detach(FBG(master_instance), H->fbsvc_service, H->status);
+		fbsvc_detach(fbird_utils_get_master_instance(), H->fbsvc_service, H->status);
 		fbsvc_free(H->fbsvc_service);
 		H->fbsvc_service = NULL;
 	}
 
-	H->fbsvc_service = fbsvc_attach(FBG(master_instance), svc_name, p,
+	H->fbsvc_service = fbsvc_attach(fbird_utils_get_master_instance(), svc_name, p,
 		(const unsigned char *)spb, H->status);
 	if (!H->fbsvc_service) {
 		pdo_fbird_error(dbh);
@@ -466,7 +473,7 @@ static char *_pdo_fbird_service_query_line(pdo_dbh_t *dbh, char info_action)
 	static const unsigned char spb[] = { isc_info_svc_timeout, 4, 0, 10, 0, 0, 0 };
 	char res_buf[512];
 
-	if (!fbsvc_query(FBG(master_instance), H->fbsvc_service,
+	if (!fbsvc_query(fbird_utils_get_master_instance(), H->fbsvc_service,
 			sizeof(spb), (const unsigned char *)spb,
 			1, (const unsigned char *)&info_action,
 			sizeof(res_buf), (unsigned char *)res_buf, H->status)) {
@@ -515,7 +522,7 @@ static char *_pdo_fbird_service_query_lines(pdo_dbh_t *dbh)
 	smart_str output = {0};
 
 	for (;;) {
-		if (!fbsvc_query(FBG(master_instance), H->fbsvc_service,
+		if (!fbsvc_query(fbird_utils_get_master_instance(), H->fbsvc_service,
 				sizeof(spb), (const unsigned char *)spb,
 				1, (const unsigned char *)&info_action,
 				sizeof(res_buf), (unsigned char *)res_buf, H->status)) {
@@ -628,7 +635,7 @@ static int _pdo_fbird_service_user_op(pdo_dbh_t *dbh, char operation, zval *val)
 		p += len;
 	}
 
-	if (!fbsvc_start(FBG(master_instance), H->fbsvc_service,
+	if (!fbsvc_start(fbird_utils_get_master_instance(), H->fbsvc_service,
 			p, (const unsigned char *)buf, H->status)) {
 		pdo_fbird_error(dbh);
 		return 0;
@@ -745,7 +752,7 @@ static bool pdo_fbird_handle_set_attribute(pdo_dbh_t *dbh, zend_long attr, zval 
 
 		case PDO_FBIRD_ATTR_SERVICE_DETACH:
 			if (H->fbsvc_service) {
-				fbsvc_detach(FBG(master_instance), H->fbsvc_service, H->status);
+				fbsvc_detach(fbird_utils_get_master_instance(), H->fbsvc_service, H->status);
 				fbsvc_free(H->fbsvc_service);
 				H->fbsvc_service = NULL;
 			}
@@ -786,7 +793,7 @@ static bool pdo_fbird_handle_set_attribute(pdo_dbh_t *dbh, zend_long attr, zval 
 				(char)opts, (char)(opts >> 8), (char)(opts >> 16), (char)(opts >> 24));
 			if (verbose) spb_buf[spb_len++] = isc_spb_verbose;
 
-			if (!fbsvc_start(FBG(master_instance), H->fbsvc_service,
+			if (!fbsvc_start(fbird_utils_get_master_instance(), H->fbsvc_service,
 					(unsigned short)spb_len, (const unsigned char *)spb_buf, H->status)) {
 				pdo_fbird_error(dbh);
 				return false;
@@ -833,7 +840,7 @@ static bool pdo_fbird_handle_set_attribute(pdo_dbh_t *dbh, zend_long attr, zval 
 				(char)action, (char)argument, (char)(argument >> 8),
 				(char)(argument >> 16), (char)(argument >> 24));
 
-			if (!fbsvc_start(FBG(master_instance), H->fbsvc_service,
+			if (!fbsvc_start(fbird_utils_get_master_instance(), H->fbsvc_service,
 					(unsigned short)spb_len, (const unsigned char *)spb_buf, H->status)) {
 				pdo_fbird_error(dbh);
 				return false;
@@ -1093,7 +1100,7 @@ static zend_result pdo_fbird_check_liveness(pdo_dbh_t *dbh)
 		return FAILURE;
 	}
 	/* Real server ping via isc_info roundtrip */
-	return fbc_ping(FBG(master_instance), H->fbc_conn, H->status) ? SUCCESS : FAILURE;
+	return fbc_ping(fbird_utils_get_master_instance(), H->fbc_conn, H->status) ? SUCCESS : FAILURE;
 }
 /* }}} */
 
@@ -1190,13 +1197,13 @@ static zend_string *pdo_fbird_handle_last_id(pdo_dbh_t *dbh, const zend_string *
 		return NULL;
 	}
 
-	void *stmt = fbs_prepare(FBG(master_instance), attachment, tr_handle, H->fbc_conn,
+	void *stmt = fbs_prepare(fbird_utils_get_master_instance(), attachment, tr_handle, H->fbc_conn,
 		query, (unsigned)strlen(query), H->dialect, H->status);
 	if (!stmt) {
 		return NULL;
 	}
 
-	ISC_INT64 result = fbs_execute_singleton_int64(FBG(master_instance), stmt, tr_handle, H->status);
+	ISC_INT64 result = fbs_execute_singleton_int64(fbird_utils_get_master_instance(), stmt, tr_handle, H->status);
 
 	if (H->status[0] == 1 && H->status[1] != 0) {
 		fbs_free(stmt, H->status);
@@ -1277,7 +1284,7 @@ static int pdo_fbird_handle_factory(pdo_dbh_t *dbh, zval *driver_options)
 	else         snprintf(connstr, sizeof(connstr), "%s", dbname);
 
 	H->fbc_conn = fbc_connect(
-		FBG(master_instance),
+		fbird_utils_get_master_instance(),
 		connstr,    strlen(connstr),
 		dbh->username  ? dbh->username  : "", dbh->username  ? strlen(dbh->username)  : 0,
 		dbh->password  ? dbh->password  : "", dbh->password  ? strlen(dbh->password)  : 0,
